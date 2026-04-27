@@ -7,59 +7,57 @@ import os
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# room_id -> set of websockets
 rooms = {}
 
 async def handle_client(websocket):
-    client_type = None
     room_id = None
-    
+
     try:
         reg_msg = await websocket.recv()
         reg = json.loads(reg_msg)
-        
         room_id = reg.get("room", "default")
-        client_type = reg.get("type")
-        
+
         if room_id not in rooms:
-            rooms[room_id] = {}
-        
-        rooms[room_id][client_type] = websocket
-        logger.info(f"[{room_id}] {client_type} connected")
-        
-        await notify_room_status(room_id)
-        
+            rooms[room_id] = set()
+
+        rooms[room_id].add(websocket)
+        count = len(rooms[room_id])
+        logger.info(f"[{room_id}] Client joined. Total: {count}")
+
+        # Notify all in room about count
+        await notify_room(room_id)
+
+        # Relay loop — send audio to everyone else in room
         async for message in websocket:
-            room = rooms.get(room_id, {})
-            if client_type == "python":
-                target = room.get("web")
-            else:
-                target = room.get("python")
-            
-            if target:
+            others = rooms.get(room_id, set()) - {websocket}
+            for other in others:
                 try:
-                    await target.send(message)
+                    await other.send(message)
                 except:
                     pass
-    
+
     except websockets.exceptions.ConnectionClosed:
-        logger.info(f"[{room_id}] {client_type} disconnected")
+        logger.info(f"[{room_id}] Client disconnected")
     except Exception as e:
         logger.error(f"Error: {e}")
     finally:
-        if room_id and client_type and room_id in rooms:
-            rooms[room_id].pop(client_type, None)
+        if room_id and room_id in rooms:
+            rooms[room_id].discard(websocket)
             if not rooms[room_id]:
                 del rooms[room_id]
+            else:
+                await notify_room(room_id)
 
-async def notify_room_status(room_id):
-    room = rooms.get(room_id, {})
+async def notify_room(room_id):
+    room = rooms.get(room_id, set())
+    count = len(room)
     status_msg = json.dumps({
         "type": "status",
-        "python_connected": "python" in room,
-        "web_connected": "web" in room,
-        "both_ready": "python" in room and "web" in room
+        "count": count,
+        "both_ready": count >= 2
     })
-    for ws in room.values():
+    for ws in room:
         try:
             await ws.send(status_msg)
         except:
