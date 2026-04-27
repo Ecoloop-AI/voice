@@ -84,7 +84,8 @@ async def health_check(path, request_headers):
         return (200, [("Content-Type", "text/plain")], b"OK")
 
 async def main():
-    port = 8765
+    import os
+    port = int(os.environ.get("PORT", 8765))
     logger.info(f"Starting audio relay server on port {port}")
     async with websockets.serve(
         handle_client, 
